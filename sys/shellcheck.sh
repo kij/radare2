@@ -19,13 +19,11 @@ FMT=gcc
 
 SHCHK="shellcheck --format=${FMT}"
 
-if ! [ -f "./sys/known_scripts" ] ;
-	echo "Find all shellscripts"
-	find .  -not -iwholename '*.git*'  | xargs file | grep "POSIX shell script" | cut -d: -f1  > known_scripts
+if ! [ -f "./sys/scripts.list" ] ;then
+	echo "Find all shellscripts, caching in sys/scripts.list"
+	find .  -not -iwholename '*.git*' -print0  | xargs -0 file | grep "POSIX shell script" | cut -d: -f1  > sys/scripts.list
 fi
 
-checkshellscript "./sys/known_scripts" "$SHCHK"
+#checkshellscript "./sys/scripts.list" "$SHCHK"
+checkshellscript "./sys/scripts.list" "checkbashisms"
 
-
-
- 
