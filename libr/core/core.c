@@ -281,7 +281,7 @@ R_API RCore *r_core_cast(void *p) {
 
 static void core_post_write_callback(void *user, ut64 maddr, ut8 *bytes, int cnt) {
 	RCore *core = (RCore *)user;
-	RIOSection *sec;
+	RBinSection *sec;
 	ut64 vaddr;
 
 	if (!r_config_get_i (core->config, "asm.cmt.patch")) {
@@ -301,7 +301,7 @@ static void core_post_write_callback(void *user, ut64 maddr, ut8 *bytes, int cnt
 		return;
 	}
 
-	if ((sec = r_io_section_get (core->io, maddr))) {
+	if ((sec = r_bin_get_section_at (r_bin_cur_object (core->bin), maddr, false))) {
 		vaddr = maddr + sec->vaddr - sec->paddr;
 	} else {
 		vaddr = maddr;
@@ -419,7 +419,7 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 	RAnalFunction *fcn;
 	char *ptr, *bptr, *out = NULL;
 	RFlagItem *flag;
-	RIOSection *s;
+	RBinSection *s;
 	RAnalOp op;
 	ut64 ret = 0;
 
@@ -588,21 +588,24 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 		case 'B':
 		case 'M': {
 				ut64 lower = UT64_MAX;
-				SdbListIter *iter;
-				RIOSection *s;
-				ls_foreach (core->io->sections, iter, s) {
-					if (!s->vaddr && s->paddr) {
-						continue;
-					}
-					if (s->vaddr < lower) lower = s->vaddr;
+				ut64 size = 0LL;
+				RIOMap *map = r_io_map_get (core->io, core->offset);
+				if (map) {
+					lower = r_itv_begin (map->itv);
+					size = r_itv_size (map->itv);
 				}
+
 				if (str[1] == 'B') {
 					/* clear lower bits of the lowest map address to define the base address */
 					const int clear_bits = 16;
 					lower >>= clear_bits;
 					lower <<= clear_bits;
 				}
-				return (lower == UT64_MAX)? 0LL: lower;
+				if (str[2] == 'M') {
+					return size;
+				} else {
+					return (lower == UT64_MAX)? 0LL: lower;
+				}
 			}
 			break;
 		case 'v': return op.val; // immediate value
@@ -631,7 +634,7 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 		case 'w':
 			return r_config_get_i (core->config, "asm.bits") / 8;
 		case 'S':
-			if ((s = r_io_section_vget (core->io, core->offset))) {
+			if ((s = r_bin_get_section_at (r_bin_cur_object (core->bin), core->offset, true))) {
 				return (str[2] == 'S'? s->size: s->vaddr);
 			}
 			return 0LL;
@@ -652,8 +655,8 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 		case '$': return str[2] == '$' ? core->prompt_offset : core->offset;
 		case 'o':
 			{
-				RIOSection *s;
-				s = r_io_section_vget (core->io, core->offset);
+				RBinSection *s;
+				s = r_bin_get_section_at (r_bin_cur_object (core->bin), core->offset, true);
 				return s ? core->offset - s->vaddr + s->paddr : core->offset;
 			}
 			break;
@@ -1147,6 +1150,25 @@ static void autocomplete_flagspaces(RLine* line, const char* msg) {
 	line->completion.argv = tmp_argv;
 }
 
+static void autocomplete_functions (RLine* line, const char* str) {
+	RCore *core = line->user;
+	if (!core || !str) {
+		return;
+	}
+	RListIter *iter;
+	RAnalFunction *fcn;
+	int n = strlen (str), i = 0;
+	r_list_foreach (core->anal->fcns, iter, fcn) {
+		const char *name = r_core_anal_fcn_name (core, fcn);
+		if (!strncmp (name, str, n)) {
+			tmp_argv[i++] = name;
+		}
+	}
+	tmp_argv[i] = NULL;
+	line->completion.argc = i;
+	line->completion.argv = tmp_argv;
+}
+
 static void autocomplete_macro(RLine* line, const char* str) {
 	RCore *core = line->user;
 	if (!core || !str) {
@@ -1261,6 +1283,9 @@ static bool find_autocomplete(RLine *line) {
 		break;
 	case R_CORE_AUTOCMPLT_FLSP:
 		autocomplete_flagspaces (line, p);
+		break;
+	case R_CORE_AUTOCMPLT_FCN:
+		autocomplete_functions (line, p);
 		break;
 	case R_CORE_AUTOCMPLT_ZIGN:
 		autocomplete_zignatures (line, p);
@@ -1701,7 +1726,7 @@ R_API char *r_core_anal_hasrefs(RCore *core, ut64 value, bool verbose) {
 static char *r_core_anal_hasrefs_to_depth(RCore *core, ut64 value, int depth) {
 	RStrBuf *s = r_strbuf_new (NULL);
 	ut64 type;
-	RIOSection *sect;
+	RBinSection *sect;
 	char *mapname = NULL;
 	RAnalFunction *fcn;
 	RFlagItem *fi = r_flag_get_i (core->flags, value);
@@ -1713,7 +1738,7 @@ static char *r_core_anal_hasrefs_to_depth(RCore *core, ut64 value, int depth) {
 			mapname = strdup (map->name);
 		}
 	}
-	sect = value? r_io_section_vget (core->io, value): NULL;
+	sect = value? r_bin_get_section_at (r_bin_cur_object (core->bin), value, true): NULL;
 	if(! ((type&R_ANAL_ADDR_TYPE_HEAP)||(type&R_ANAL_ADDR_TYPE_STACK)) ) {
 		// Do not repeat "stack" or "heap" words unnecessarily.
 		if (sect && sect->name[0]) {
@@ -1755,7 +1780,7 @@ static char *r_core_anal_hasrefs_to_depth(RCore *core, ut64 value, int depth) {
 			r_io_read_at (core->io, value, buf, sizeof (buf));
 			r_asm_set_pc (core->assembler, value);
 			r_asm_disassemble (core->assembler, &op, buf, sizeof (buf));
-			r_strbuf_appendf (s, " '%s'", op.buf_asm);
+			r_strbuf_appendf (s, " '%s'", r_asm_op_get_asm (&op));
 			/* get library name */
 			{ // NOTE: dup for mapname?
 				RDebugMap *map;
@@ -1941,7 +1966,6 @@ static void init_autocomplete (RCore* core) {
 	r_core_autocomplete_add (core->autocomplete, "/r", R_CORE_AUTOCMPLT_FLAG, true);
 	r_core_autocomplete_add (core->autocomplete, "/re", R_CORE_AUTOCMPLT_FLAG, true);
 	r_core_autocomplete_add (core->autocomplete, "aav", R_CORE_AUTOCMPLT_FLAG, true);
-	r_core_autocomplete_add (core->autocomplete, "afi", R_CORE_AUTOCMPLT_FLAG, true);
 	r_core_autocomplete_add (core->autocomplete, "aep", R_CORE_AUTOCMPLT_FLAG, true);
 	r_core_autocomplete_add (core->autocomplete, "aef", R_CORE_AUTOCMPLT_FLAG, true);
 	r_core_autocomplete_add (core->autocomplete, "afb", R_CORE_AUTOCMPLT_FLAG, true);
@@ -1954,6 +1978,8 @@ static void init_autocomplete (RCore* core) {
 	r_core_autocomplete_add (core->autocomplete, "aecu", R_CORE_AUTOCMPLT_FLAG, true);
 	r_core_autocomplete_add (core->autocomplete, "aesu", R_CORE_AUTOCMPLT_FLAG, true);
 	r_core_autocomplete_add (core->autocomplete, "aeim", R_CORE_AUTOCMPLT_FLAG, true);
+	r_core_autocomplete_add (core->autocomplete, "afi", R_CORE_AUTOCMPLT_FCN, true);
+	r_core_autocomplete_add (core->autocomplete, "afcf", R_CORE_AUTOCMPLT_FCN, true);
 	/* evars */
 	r_core_autocomplete_add (core->autocomplete, "e", R_CORE_AUTOCMPLT_EVAL, true);
 	r_core_autocomplete_add (core->autocomplete, "et", R_CORE_AUTOCMPLT_EVAL, true);
@@ -2063,7 +2089,7 @@ R_API bool r_core_init(RCore *core) {
 	core->rtr_n = 0;
 	core->blocksize_max = R_CORE_BLOCKSIZE_MAX;
 	core->task_id_next = 0;
-	core->tasks = r_list_newf ((RListFree)r_core_task_free);
+	core->tasks = r_list_newf ((RListFree)r_core_task_decref);
 	core->tasks_queue = r_list_new ();
 	core->oneshot_queue = r_list_newf (free);
 	core->oneshots_enqueued = 0;
@@ -2247,7 +2273,7 @@ R_API RCore *r_core_fini(RCore *c) {
 		return NULL;
 	}
 	r_core_task_break_all (c);
-	r_core_task_join (c, NULL, NULL);
+	r_core_task_join (c, NULL, -1);
 	r_core_wait (c);
 	/* TODO: it leaks as shit */
 	//update_sdb (c);
@@ -2328,7 +2354,7 @@ R_API void r_core_prompt_loop(RCore *r) {
 /*			if (lock) r_th_lock_leave (lock);
 		if (rabin_th && !r_th_wait_async (rabin_th)) {
 			eprintf ("rabin thread end \n");
-			r_th_free (rabin_th);
+			r_th_kill_free (rabin_th);
 			r_th_lock_free (lock);
 			lock = NULL;
 			rabin_th = NULL;
@@ -2355,7 +2381,7 @@ static int prompt_flag (RCore *r, char *s, size_t maxlen) {
 }
 
 static void prompt_sec(RCore *r, char *s, size_t maxlen) {
-	const RIOSection *sec = r_io_section_vget (r->io, r->offset);
+	const RBinSection *sec = r_bin_get_section_at (r_bin_cur_object (r->bin), r->offset, true);
 	if (!sec) {
 		return;
 	}

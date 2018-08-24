@@ -4748,25 +4748,25 @@ static void cmd_anal_opcode(RCore *core, const char *input) {
 		}
 		break;
 	case 'd': // "aod"
-                if (input[1] == 'a') { // "aoda"
-                        // list sdb database
-                        sdb_foreach (core->assembler->pair, listOpDescriptions, core);
-                } else if (input[1] == 0) {
-                        int cur = R_MAX (core->print->cur, 0);
-                        // XXX: we need cmd_xxx.h (cmd_anal.h)
-                        core_anal_bytes (core, core->block + cur, core->blocksize, 1, 'd');
-                } else if (input[1] == ' ') {
-                        char *d = r_asm_describe (core->assembler, input + 2);
-                        if (d && *d) {
-                                r_cons_println (d);
-                                free (d);
-                        } else {
-                                eprintf ("Unknown mnemonic\n");
-                        }
-                } else {
-                        eprintf ("Use: aod[?a] ([opcode])    describe current, [given] or all mnemonics\n");
-                }
-                break;
+		if (input[1] == 'a') { // "aoda"
+			// list sdb database
+			sdb_foreach (core->assembler->pair, listOpDescriptions, core);
+		} else if (input[1] == 0) {
+			int cur = R_MAX (core->print->cur, 0);
+			// XXX: we need cmd_xxx.h (cmd_anal.h)
+			core_anal_bytes (core, core->block + cur, core->blocksize, 1, 'd');
+		} else if (input[1] == ' ') {
+			char *d = r_asm_describe (core->assembler, input + 2);
+			if (d && *d) {
+				r_cons_println (d);
+				free (d);
+			} else {
+				eprintf ("Unknown mnemonic\n");
+			}
+		} else {
+			eprintf ("Use: aod[?a] ([opcode])    describe current, [given] or all mnemonics\n");
+		}
+		break;
 	case '*':
 		r_core_anal_hint_list (core->anal, input[0]);
 		break;
@@ -5565,14 +5565,14 @@ static bool cmd_anal_refs(RCore *core, const char *input) {
 					r_asm_set_pc (core->assembler, ref->at);
 					r_asm_disassemble (core->assembler, &asmop, buf, 12);
 					r_cons_printf ("{\"from\":%" PFMT64u ",\"to\":%" PFMT64u ",\"type\":\"%s\",\"opcode\":\"%s\"}%s",
-						ref->at, ref->addr, r_anal_xrefs_type_tostring (ref->type), asmop.buf_asm, iter->n? ",": "");
+						ref->at, ref->addr, r_anal_xrefs_type_tostring (ref->type), r_asm_op_get_asm (&asmop), iter->n? ",": "");
 				}
 				r_cons_print ("]\n");
 			} else if (input[1] == '*') { // axf*
 				// TODO: implement multi-line comments
 				r_list_foreach (list, iter, ref) {
 					r_cons_printf ("CCa 0x%" PFMT64x " \"XREF from 0x%" PFMT64x "\n",
-						ref->at, ref->type, asmop.buf_asm, iter->n? ",": "");
+						ref->at, ref->type, r_asm_op_get_asm (&asmop), iter->n? ",": "");
 				}
 			} else { // axf
 				char str[512];
@@ -5910,27 +5910,31 @@ static char *getViewerPath() {
 }
 
 static char* graph_cmd(RCore *core, char *r2_cmd, const char *save_path) {
+	const char *dot = "dot";
 	char *cmd = NULL;
 	const char *ext = r_config_get (core->config, "graph.gv.format");
-	char *dotPath = r_file_path ("dot");
-	if (!r_file_exists (dotPath)) {
+	char *dotPath = r_file_path (dot);
+	if (!strcmp (dotPath, dot)) {
 		free (dotPath);
-		dotPath = r_file_path ("xdot");
-	}
-	if (r_file_exists (dotPath)) {
-		if (save_path && *save_path) {
-			cmd = r_str_newf ("%s > a.dot;!%s -T%s -o%s a.dot;", r2_cmd, dotPath, ext, save_path);
-		} else {
-			char *viewer = getViewerPath();
-			if (viewer) {
-				cmd = r_str_newf ("%s > a.dot;!%s -T%s -oa.%s a.dot;!%s a.%s", r2_cmd, dotPath, ext, ext, viewer, ext);
-				free (viewer);
-			} else {
-				eprintf ("Cannot find a valid picture viewer");
-			}
+		dot = "xdot";
+		dotPath = r_file_path (dot);
+		if (!strcmp (dotPath, dot)) {
+			free (dotPath);
+			return r_str_new ("agf");
 		}
+	}
+	if (save_path && *save_path) {
+		cmd = r_str_newf ("%s > a.dot;!%s -T%s -o%s a.dot;",
+			r2_cmd, dot, ext, save_path);
 	} else {
-		cmd = r_str_new ("agf");
+		char *viewer = getViewerPath();
+		if (viewer) {
+			cmd = r_str_newf ("%s > a.dot;!%s -T%s -oa.%s a.dot;!%s a.%s",
+				r2_cmd, dot, ext, ext, viewer, ext);
+			free (viewer);
+		} else {
+			eprintf ("Cannot find a valid picture viewer\n");
+		}
 	}
 	free (dotPath);
 	return cmd;
@@ -6105,8 +6109,8 @@ static void cmd_agraph_print(RCore *core, const char *input) {
 		r_agraph_foreach (core->graph, agraph_print_node, NULL);
 		r_agraph_foreach_edge (core->graph, agraph_print_edge, NULL);
 		break;
-	case 'J': 
-	case 'j': 
+	case 'J':
+	case 'j':
 		r_cons_printf ("{\"nodes\":[");
 		r_agraph_print_json (core->graph);
 		r_cons_printf ("]}\n");
@@ -6526,7 +6530,7 @@ static void cmd_anal_graph(RCore *core, const char *input) {
 	case 'v': // "agv" alias for "agfv"
 		r_core_cmdf (core, "agfv%s", input + 1);
 		break;
-	case 'w':// "agw" 
+	case 'w':// "agw"
 		if (r_config_get_i (core->config, "graph.web")) {
 			r_core_cmd0 (core, "=H /graph/");
 		} else {

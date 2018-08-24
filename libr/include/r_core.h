@@ -139,6 +139,7 @@ typedef enum r_core_autocomplete_types_t {
 	R_CORE_AUTOCMPLT_DFLT = 0,
 	R_CORE_AUTOCMPLT_FLAG,
 	R_CORE_AUTOCMPLT_FLSP,
+	R_CORE_AUTOCMPLT_FCN,
 	R_CORE_AUTOCMPLT_ZIGN,
 	R_CORE_AUTOCMPLT_EVAL,
 	R_CORE_AUTOCMPLT_PRJT,
@@ -494,6 +495,7 @@ R_API int r_core_anal_fcn(RCore *core, ut64 at, ut64 from, int reftype, int dept
 R_API char *r_core_anal_fcn_autoname(RCore *core, ut64 addr, int dump);
 R_API void r_core_anal_autoname_all_fcns(RCore *core);
 R_API int r_core_anal_fcn_list(RCore *core, const char *input, const char *rad);
+R_API char *r_core_anal_fcn_name(RCore *core, RAnalFunction *fcn);
 R_API int r_core_anal_fcn_list_size(RCore *core);
 R_API void r_core_anal_fcn_labels(RCore *core, RAnalFunction *fcn, int rad);
 R_API int r_core_anal_fcn_clean(RCore *core, ut64 addr);
@@ -743,6 +745,8 @@ typedef enum {
 typedef struct r_core_task_t {
 	int id;
 	RTaskState state;
+	bool transient; // delete when finished
+	int refcount;
 	RThreadSemaphore *running_sem;
 	void *user;
 	RCore *core;
@@ -759,12 +763,14 @@ typedef struct r_core_task_t {
 typedef void (*RCoreTaskOneShot)(void *);
 
 R_API RCoreTask *r_core_task_get(RCore *core, int id);
+R_API RCoreTask *r_core_task_get_incref(RCore *core, int id);
 R_API void r_core_task_print(RCore *core, RCoreTask *task, int mode);
 R_API void r_core_task_list(RCore *core, int mode);
 R_API int r_core_task_running_tasks_count(RCore *core);
 R_API const char *r_core_task_status(RCoreTask *task);
 R_API RCoreTask *r_core_task_new(RCore *core, bool create_cons, const char *cmd, RCoreTaskCallback cb, void *user);
-R_API void r_core_task_free(RCoreTask *task);
+R_API void r_core_task_incref(RCoreTask *task);
+R_API void r_core_task_decref(RCoreTask *task);
 R_API void r_core_task_enqueue(RCore *core, RCoreTask *task);
 R_API void r_core_task_enqueue_oneshot(RCore *core, RCoreTaskOneShot func, void *user);
 R_API int r_core_task_run_sync(RCore *core, RCoreTask *task);
@@ -778,7 +784,7 @@ R_API void r_core_task_break_all(RCore *core);
 R_API int r_core_task_del(RCore *core, int id);
 R_API void r_core_task_del_all_done(RCore *core);
 R_API RCoreTask *r_core_task_self(RCore *core);
-R_API void r_core_task_join(RCore *core, RCoreTask *current, RCoreTask *task);
+R_API void r_core_task_join(RCore *core, RCoreTask *current, int id);
 typedef void (*inRangeCb) (RCore *core, ut64 from, ut64 to, int vsize,
 			   bool asterisk, int count);
 R_API int r_core_search_value_in_range (RCore *core, RInterval search_itv,

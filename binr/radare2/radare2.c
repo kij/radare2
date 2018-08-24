@@ -40,7 +40,7 @@ static char* get_file_in_cur_dir(const char *filepath) {
 
 static RThread *thread = NULL;
 
-static int loading_thread(RThread *th) {
+static RThreadFunctionRet loading_thread(RThread *th) {
 	const char *tok = "\\|/-";
 	int i = 0;
 	if (th) {
@@ -50,7 +50,7 @@ static int loading_thread(RThread *th) {
 			i++;
 		}
 	}
-	return 0;
+	return R_TH_STOP;
 }
 
 static void loading_start() {
@@ -59,8 +59,7 @@ static void loading_start() {
 }
 
 static void loading_stop() {
-	r_th_kill (thread, true);
-	r_th_free (thread);
+	r_th_kill_free (thread);
 	thread = NULL;
 }
 
@@ -260,7 +259,7 @@ static int main_print_var(const char *var_name) {
 // Load the binary information from rabin2
 // TODO: use thread to load this, split contents line, per line and use global lock
 #if USE_THREADS
-static int rabin_delegate(RThread *th) {
+static RThreadFunctionRet rabin_delegate(RThread *th) {
 	RIODesc *d = r_io_desc_get (r.io, r.file->fd);
 	if (rabin_cmd && r_file_exists (d->name)) {
 		char *nptr, *ptr, *cmd = r_sys_cmd_str (rabin_cmd, NULL, NULL);
@@ -290,7 +289,7 @@ static int rabin_delegate(RThread *th) {
 	if (th) {
 		eprintf ("rabin2: done\n");
 	}
-	return 0;
+	return R_TH_STOP;
 }
 #endif
 
@@ -781,6 +780,7 @@ int main(int argc, char **argv, char **envp) {
 	if (debug == 1) {
 		if (optind >= argc && !haveRarunProfile) {
 			eprintf ("Missing argument for -d\n");
+			LISTS_FREE ();
 			return 1;
 		}
 		const char *src = haveRarunProfile? pfile: argv[optind];
@@ -813,6 +813,7 @@ int main(int argc, char **argv, char **envp) {
 	}
 	ret = run_commands (NULL, prefiles, false);
 	r_list_free (prefiles);
+	prefiles = NULL;
 
 #if 0
 	// if "- -i" is used we will open malloc:// instead
@@ -830,6 +831,7 @@ int main(int argc, char **argv, char **envp) {
 		const char *uri = argv[optind];
 		if (optind >= argc) {
 			eprintf ("Missing URI for -C\n");
+			LISTS_FREE ();
 			return 1;
 		}
 		if (!strncmp (uri, "http://", 7)) {
@@ -837,6 +839,7 @@ int main(int argc, char **argv, char **envp) {
 		} else {
 			r_core_cmdf (&r, "=+http://%s/cmd/", argv[optind]);
 		}
+		LISTS_FREE ();
 		return 0;
 	}
 
@@ -878,10 +881,12 @@ int main(int argc, char **argv, char **envp) {
 	if (pfile && r_file_is_directory (pfile)) {
 		if (debug) {
 			eprintf ("Error: Cannot debug directories, yet.\n");
+			LISTS_FREE ();
 			return 1;
 		}
 		if (chdir (argv[optind])) {
 			eprintf ("[d] Cannot open directory\n");
+			LISTS_FREE ();
 			return 1;
 		}
 	} else if (argv[optind] && !strcmp (argv[optind], "=")) {
@@ -897,6 +902,7 @@ int main(int argc, char **argv, char **envp) {
 				r_cons_flush ();
 				free (buf);
 				eprintf ("[=] Cannot open '%s'\n", path);
+				LISTS_FREE ();
 				return 1;
 			}
 			r_io_write_at (r.io, 0, buf, sz);
@@ -920,6 +926,7 @@ int main(int argc, char **argv, char **envp) {
 			perms = R_IO_READ | R_IO_WRITE | R_IO_EXEC;
 			if (optind >= argc) {
 				eprintf ("No program given to -d\n");
+				LISTS_FREE ();
 				return 1;
 			}
 			if (debug == 2) {
@@ -1321,6 +1328,7 @@ int main(int argc, char **argv, char **envp) {
 	r_list_free (cmds);
 	r_list_free (evals);
 	r_list_free (files);
+	cmds = evals = files = NULL;
 	if (ret) {
 		ret = 0;
 		goto beach;
@@ -1383,7 +1391,7 @@ int main(int argc, char **argv, char **envp) {
 				if (lock) r_th_lock_leave (lock);
 				if (rabin_th && !r_th_wait_async (rabin_th)) {
 					// eprintf ("rabin thread end \n");
-					r_th_free (rabin_th);
+					r_th_kill_free (rabin_th);
 					r_th_lock_free (lock);
 					lock = NULL;
 					rabin_th = NULL;
@@ -1404,7 +1412,7 @@ int main(int argc, char **argv, char **envp) {
 				if (r_core_task_running_tasks_count (&r) > 0) {
 					if (r_cons_yesno ('y', "There are running background tasks. Do you want to kill them? (Y/n)")) {
 						r_core_task_break_all (&r);
-						r_core_task_join (&r, r.main_task, NULL);
+						r_core_task_join (&r, r.main_task, -1);
 					} else {
 						continue;
 					}
@@ -1423,7 +1431,9 @@ int main(int argc, char **argv, char **envp) {
 							} else {
 								r_debug_detach (r.dbg, r.dbg->pid);
 							}
-						} else continue;
+						} else {
+							continue;
+						}
 					}
 				}
 
@@ -1474,6 +1484,7 @@ beach:
 	free (file);
 	r_str_const_free (NULL);
 	r_cons_free ();
+	LISTS_FREE ();
 	return ret;
 }
 #endif // EMSCRIPTEN
