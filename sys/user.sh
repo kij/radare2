@@ -11,7 +11,7 @@ if [ $? != 0 ]; then
 fi
 
 # find root
-cd "$(dirname "$PWD/$0")" ; cd ..
+cd "$(dirname "$0")" ; cd ..
 
 # update
 if [ "$1" != "--without-pull" ]; then
